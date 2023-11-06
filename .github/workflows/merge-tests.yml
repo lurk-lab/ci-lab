@@ -14,7 +14,7 @@ concurrency:
 jobs:
   gpu-benchmark:
     # Test working run
-    if: github.event_name != 'pull_request' || github.event.action == 'enqueued'
+    #if: github.event_name != 'pull_request' || github.event.action == 'enqueued'
     name: Run fibonacci bench
     runs-on: ubuntu-latest
     steps:
@@ -42,26 +42,33 @@ jobs:
       - run: echo ${{ env.BASE_REF }}
       - name: Run bench on base branch
         run: cd main/benches && just --dotenv-filename bench.env bench fibonacci
-      - name: Copy bench output to PR branch
-        run: ls -a && cp main/${{ env.BASE_REF }}.json .
+      - name: Copy bench output to PR branch for comparison
+        #cp main/${{ env.BASE_REF }}.json .
+        run: |
+          cp -r main/target/criterion ./target
+      #- name: Print base bench
+      #  run: cat ${{ env.BASE_REF }}.json
       - name: Run bench on PR branch
-        run: ls -a && cd benches && just --dotenv-filename bench.env bench fibonacci
+        run: cd benches && just --dotenv-filename bench.env bench fibonacci
+      - name: Print PR bench
+        run: cat ${{ github.sha }}.json
       # Create a `criterion-table` and write in commit comment
       - name: Run `criterion-table`
         run: cat ${{ github.sha }}.json | criterion-table > BENCHMARKS.md
-      - name: Write bench on commit comment
-        uses: peter-evans/commit-comment@v3
-        with:
-          body-path: BENCHMARKS.md
+      #- name: Write bench on commit comment
+      #  uses: peter-evans/commit-comment@v3
+      #  with:
+      #    body-path: BENCHMARKS.md
       # TODO: Use jq for JSON parsing if needed
       # Check for benchmark regression based on Criterion's configured noise threshold
       - name: Performance regression check
         id: check-regression
         run: |
+          echo $(grep -c 'Regressed' ${{ github.sha }}.json)
           echo "regress_count=$(grep -c 'Regressed' ${{ github.sha }}.json)" >> $GITHUB_OUTPUT
       # Fail job if regression found
       - uses: actions/github-script@v6
-        if: ${{ steps.check-regression.outputs.regress_count }} > 0
+        if: ${{ steps.check-regression.outputs.regress_count > 0 }}
         with:
           script: |
             core.setFailed('Fibonacci bench regression detected')
