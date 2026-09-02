@@ -14,11 +14,15 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Create Lake build directory
+      shell: bash
+      run: mkdir -p "${{ github.workspace }}/.lake"
+
     - name: Mount Namespace cache
       id: cache
       uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
       with:
-        path: ./.lake
+        path: ${{ github.workspace }}/.lake
 
     - name: Report Namespace cache state
       shell: bash
@@ -49,7 +53,6 @@ runs:
           echo "Previously cached workflow markers: none"
         fi
 
-        mkdir -p .lake
         printf 'event=%s run=%s sha=%s marker=%s\n' \
           "$GITHUB_EVENT_NAME" "$GITHUB_RUN_ID" "$GITHUB_SHA" "$CACHE_MARKER" \
           > ".lake/nscloud-cache-$CACHE_MARKER.txt"
