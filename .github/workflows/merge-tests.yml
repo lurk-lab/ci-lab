@@ -6,79 +6,62 @@ on:
   merge_group:
   issue_comment:
     types: [created]
-  workflow_dispatch:
-    inputs:
-      pr:
-        description: PR number (for the run name)
-        required: true
-      merge-sha:
-        description: Full SHA of the PR's test merge commit
-        required: true
 
-run-name: "${{ github.event_name == 'workflow_dispatch' && format('Merge tests for PR #{0}', inputs.pr) || github.event_name == 'issue_comment' && format('Relay !merge-tests for PR #{0}', github.event.issue.number) || 'Merge tests' }}"
+run-name: "${{ github.event_name == 'issue_comment' && format('Merge tests for PR #{0}', github.event.issue.number) || 'Merge tests' }}"
 
 permissions:
   contents: read
 
 # Each merge group must report its own result to the queue. A cancelled run
 # cannot satisfy the required check, so runs are never superseded here.
-# Comment-triggered tests use a trusted workflow_dispatch because issue_comment
-# runs cannot save Actions caches.
 
 jobs:
-  dispatch:
-    name: Relay !merge-tests comment
+  prepare:
+    name: Prepare merge tests
     if: >-
-      github.event_name == 'issue_comment' &&
-      github.event.issue.pull_request &&
-      github.event.issue.state == 'open' &&
-      github.event.comment.user.type != 'Bot' &&
-      contains(github.event.comment.body, '!merge-tests') &&
-      (github.event.comment.author_association == 'MEMBER' ||
-       github.event.comment.author_association == 'OWNER')
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      pull-requests: read
-    steps:
-      - name: Dispatch merge tests for the PR merge commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.issue.number }}
-        run: |
-          pr=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")
-          head_repo=$(jq -r '.head.repo.full_name' <<<"$pr")
-          merge_sha=$(jq -r '.merge_commit_sha // empty' <<<"$pr")
-
-          # Dispatched runs can populate the default branch's cache scope, so
-          # untrusted fork code must not be admitted to them.
-          if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
-            echo "::error::Comment-triggered merge tests require a same-repository PR head"
-            exit 1
-          fi
-          [[ "$merge_sha" =~ ^[0-9a-f]{40}$ ]] \
-            || { echo "::error::PR does not currently have a test merge commit"; exit 1; }
-
-          gh workflow run merge-tests.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref "${{ github.event.repository.default_branch }}" \
-            -f pr="$PR_NUMBER" \
-            -f merge-sha="$merge_sha"
-
-  # This placeholder is replaced by `report` when the matrix finishes.
-  announce:
-    if: github.event_name == 'workflow_dispatch'
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request &&
+       github.event.issue.state == 'open' &&
+       github.event.comment.user.type != 'Bot' &&
+       contains(github.event.comment.body, '!merge-tests') &&
+       (github.event.comment.author_association == 'MEMBER' ||
+        github.event.comment.author_association == 'OWNER'))
     runs-on: ubuntu-latest
     permissions:
       issues: write
       pull-requests: write
     outputs:
       comment-id: ${{ steps.post.outputs.comment-id }}
+      pr: ${{ steps.target.outputs.pr }}
+      revision: ${{ steps.target.outputs.revision }}
     steps:
-      - name: Compose initial comment
+      - name: Resolve test revision
+        id: target
         env:
-          MERGE_SHA: ${{ inputs.merge-sha }}
-          PR_NUMBER: ${{ inputs.pr }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          if [ "$EVENT_NAME" = issue_comment ]; then
+            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] \
+              || { echo "::error::PR number must be a positive integer"; exit 1; }
+            revision=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+              --jq '.merge_commit_sha // empty')
+            echo "pr=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          else
+            revision=$EVENT_SHA
+          fi
+
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]] \
+            || { echo "::error::PR does not currently have a test merge commit"; exit 1; }
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Compose initial comment
+        if: github.event_name == 'issue_comment'
+        env:
+          MERGE_SHA: ${{ steps.target.outputs.revision }}
+          PR_NUMBER: ${{ steps.target.outputs.pr }}
         run: |
           {
             echo "## ⏳ Merge tests running…"
@@ -87,17 +70,20 @@ jobs:
             echo
             echo "[Watch progress](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           } > comment-body.md
+
       - name: Post initial comment
+        if: github.event_name == 'issue_comment'
         id: post
         uses: peter-evans/create-or-update-comment@v5
         with:
           token: ${{ github.token }}
-          issue-number: ${{ inputs.pr }}
+          issue-number: ${{ steps.target.outputs.pr }}
           body-path: comment-body.md
 
   merge-tests:
     name: ${{ matrix.name }}
-    if: ${{ github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' }}
+    needs: prepare
+    if: ${{ github.event_name == 'merge_group' || github.event_name == 'issue_comment' }}
     strategy:
       fail-fast: true
       matrix:
@@ -110,29 +96,14 @@ jobs:
             delay: 20
     runs-on: ubuntu-latest
     steps:
-      - name: Validate test revision
-        id: revision
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ inputs.pr }}
-          TEST_REVISION: ${{ github.event_name == 'workflow_dispatch' && inputs.merge-sha || github.sha }}
-        run: |
-          [[ "$TEST_REVISION" =~ ^[0-9a-f]{40}$ ]] \
-            || { echo "::error::Test revision must be a full 40-character SHA"; exit 1; }
-          if [ "$EVENT_NAME" = workflow_dispatch ]; then
-            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] \
-              || { echo "::error::PR number must be a positive integer"; exit 1; }
-          fi
-          echo "sha=$TEST_REVISION" >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr) || steps.revision.outputs.sha }}
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/merge', needs.prepare.outputs.pr) || needs.prepare.outputs.revision }}
           persist-credentials: false
 
       - name: Verify test revision
         env:
-          TEST_REVISION: ${{ steps.revision.outputs.sha }}
+          TEST_REVISION: ${{ needs.prepare.outputs.revision }}
         run: |
           checked_out=$(git rev-parse HEAD)
           if [ "$checked_out" != "$TEST_REVISION" ]; then
@@ -156,44 +127,29 @@ jobs:
 
   merge-tests-result:
     name: Merge tests
-    if: ${{ always() && github.event_name != 'issue_comment' }}
-    needs: merge-tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Propagate merge-test failure
-        if: >-
-          (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') &&
-          needs.merge-tests.result != 'success'
-        run: exit 1
-
-  report:
-    needs: [merge-tests-result, announce]
-    if: always() && github.event_name == 'workflow_dispatch'
+    if: >-
+      always() &&
+      (github.event_name != 'issue_comment' || needs.prepare.result != 'skipped')
+    needs: [prepare, merge-tests]
     runs-on: ubuntu-latest
     permissions:
       issues: write
       pull-requests: write
     steps:
       - name: Compose final comment
+        if: github.event_name == 'issue_comment' && needs.prepare.result == 'success'
         env:
-          MERGE_SHA: ${{ inputs.merge-sha }}
-          PR_NUMBER: ${{ inputs.pr }}
-          TEST_RESULT: ${{ needs.merge-tests-result.result }}
+          MERGE_SHA: ${{ needs.prepare.outputs.revision }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr }}
+          TEST_RESULT: ${{ needs.merge-tests.result }}
         run: |
-          case "$TEST_RESULT" in
-            success)
-              heading="## ✅ Merge tests passed"
-              summary="All dummy test suites passed"
-              ;;
-            cancelled)
-              heading="## ⚪ Merge tests cancelled"
-              summary="The dummy test run was cancelled"
-              ;;
-            *)
-              heading="## ❌ Merge tests failed"
-              summary="At least one dummy test suite failed"
-              ;;
-          esac
+          if [ "$TEST_RESULT" = success ]; then
+            heading="## ✅ Merge tests passed"
+            summary="All dummy test suites passed"
+          else
+            heading="## ❌ Merge tests failed"
+            summary="At least one dummy test suite failed"
+          fi
           {
             echo "$heading"
             echo
@@ -201,11 +157,19 @@ jobs:
             echo
             echo "[Workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           } > comment-body.md
+
       - name: Update result comment
+        if: github.event_name == 'issue_comment' && needs.prepare.result == 'success'
         uses: peter-evans/create-or-update-comment@v5
         with:
           token: ${{ github.token }}
-          issue-number: ${{ inputs.pr }}
-          comment-id: ${{ needs.announce.outputs.comment-id }}
+          issue-number: ${{ needs.prepare.outputs.pr }}
+          comment-id: ${{ needs.prepare.outputs.comment-id }}
           edit-mode: replace
           body-path: comment-body.md
+
+      - name: Propagate merge-test failure
+        if: >-
+          github.event_name != 'pull_request' &&
+          (needs.prepare.result != 'success' || needs.merge-tests.result != 'success')
+        run: exit 1
