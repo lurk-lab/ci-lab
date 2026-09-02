@@ -26,7 +26,7 @@ jobs:
        contains(github.event.comment.body, '!merge-tests') &&
        (github.event.comment.author_association == 'MEMBER' ||
         github.event.comment.author_association == 'OWNER'))
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-argument
     permissions:
       issues: write
       pull-requests: write
@@ -94,7 +94,7 @@ jobs:
           - name: Dummy integration tests
             suite: integration
             delay: 20
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-argument
     steps:
       - uses: actions/checkout@v7
         with:
@@ -110,6 +110,10 @@ jobs:
             echo "::error::PR merge ref changed before the run started; comment !merge-tests again"
             exit 1
           fi
+
+      - uses: ./.github/actions/setup-lake-cache
+        with:
+          marker: ${{ github.event_name }}-${{ matrix.suite }}
 
       # Add the matching marker file to a PR to exercise failure reporting.
       - name: Run ${{ matrix.name }}
@@ -131,7 +135,7 @@ jobs:
       always() &&
       (github.event_name != 'issue_comment' || needs.prepare.result != 'skipped')
     needs: [prepare, merge-tests]
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-argument
     permissions:
       issues: write
       pull-requests: write

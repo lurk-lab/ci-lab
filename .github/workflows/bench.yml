@@ -22,7 +22,7 @@ jobs:
       && github.event.issue.state == 'open'
       && (contains(github.event.comment.body, '!benchmark'))
       && (github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'OWNER')
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-argument
     outputs:
       benches: ${{ steps.bench-params.outputs.benches }}
       env-vars: ${{ steps.bench-params.outputs.env-vars }}
@@ -53,7 +53,7 @@ jobs:
 
   benchmark:
     needs: [ setup ]
-    runs-on: warp-ubuntu-latest-x64-16x
+    runs-on: namespace-profile-argument
     strategy:
       matrix:
         # Runs a job for each benchmark specified in the `issue_comment` input
@@ -75,11 +75,29 @@ jobs:
         with:
           ref: ${{ steps.base-branch.outputs.base_ref }}
           path : ${{ github.workspace }}/base
+      - name: Checkout PR branch
+        uses: actions/checkout@v5
+        with:
+          path: ${{ github.workspace }}/pr
+          ref: ${{ steps.base-branch.outputs.head_ref }}
+      - name: Mount Namespace caches
+        id: namespace-cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+        with:
+          path: |
+            ${{ github.workspace }}/base/.lake
+            ${{ github.workspace }}/pr/.lake
+      - name: Report Namespace cache state
+        env:
+          CACHE_HIT: ${{ steps.namespace-cache.outputs.cache-hit }}
+        run: |
+          echo "Namespace benchmark caches restored: $CACHE_HIT"
       - name: Run `lake build` on base branch
         uses: leanprover/lean-action@v1
         with:
           lake-package-directory: ${{ github.workspace }}/base
           test: false
+          use-github-cache: false
       - name: Run bench on base branch
         run: |
           if $(lake run get-exe-targets | grep -q ${{ matrix.bench }}); then
@@ -88,16 +106,12 @@ jobs:
             echo "No matching bench target found on base branch"
           fi
         working-directory: ${{ github.workspace }}/base
-      - name: Checkout PR branch
-        uses: actions/checkout@v5
-        with:
-          path: ${{ github.workspace }}/pr
-          ref: ${{ steps.base-branch.outputs.head_ref }}
       - name: Run `lake build` on PR branch
         uses: leanprover/lean-action@v1
         with:
           lake-package-directory: ${{ github.workspace }}/pr
           test: false
+          use-github-cache: false
       - name: Copy base benchmarks into PR dir for comparison
         run: |
           BENCH_DIR_PR=${{ github.workspace }}/pr/.lake/benches

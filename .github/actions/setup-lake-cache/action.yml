@@ -1,0 +1,63 @@
+name: Set up Lake cache
+description: Mount the shared Namespace Lake cache and report its contents
+
+inputs:
+  marker:
+    description: Unique name for the workflow invocation writing the cache
+    required: true
+
+outputs:
+  cache-hit:
+    description: Whether Namespace restored the Lake cache
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Mount Namespace cache
+      id: cache
+      uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+      with:
+        path: ./.lake
+
+    - name: Report Namespace cache state
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        CACHE_MARKER: ${{ inputs.marker }}
+      run: |
+        echo "Event: $GITHUB_EVENT_NAME"
+        echo "Namespace cache restored: $CACHE_HIT"
+
+        if [ -x .lake/build/bin/template ]; then
+          executable_restored=true
+        else
+          executable_restored=false
+        fi
+        echo "Cached template executable restored: $executable_restored"
+
+        restored_markers=0
+        for marker_file in .lake/nscloud-cache-*.txt; do
+          [ -e "$marker_file" ] || continue
+          if [ "$restored_markers" -eq 0 ]; then
+            echo "Previously cached workflow markers:"
+          fi
+          sed 's/^/  /' "$marker_file"
+          restored_markers=$((restored_markers + 1))
+        done
+        if [ "$restored_markers" -eq 0 ]; then
+          echo "Previously cached workflow markers: none"
+        fi
+
+        mkdir -p .lake
+        printf 'event=%s run=%s sha=%s marker=%s\n' \
+          "$GITHUB_EVENT_NAME" "$GITHUB_RUN_ID" "$GITHUB_SHA" "$CACHE_MARKER" \
+          > ".lake/nscloud-cache-$CACHE_MARKER.txt"
+
+        {
+          echo "### Namespace cache"
+          echo
+          echo "- Event: \`$GITHUB_EVENT_NAME\`"
+          echo "- Restored: \`$CACHE_HIT\`"
+          echo "- Cached template executable: \`$executable_restored\`"
+        } >> "$GITHUB_STEP_SUMMARY"
