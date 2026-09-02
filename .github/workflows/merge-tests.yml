@@ -1,8 +1,6 @@
 name: Merge tests
 
 on:
-  pull_request:
-    branches: [main]
   merge_group:
   issue_comment:
     types: [created]
@@ -173,7 +171,5 @@ jobs:
           body-path: comment-body.md
 
       - name: Propagate merge-test failure
-        if: >-
-          github.event_name != 'pull_request' &&
-          (needs.prepare.result != 'success' || needs.merge-tests.result != 'success')
+        if: needs.prepare.result != 'success' || needs.merge-tests.result != 'success'
         run: exit 1

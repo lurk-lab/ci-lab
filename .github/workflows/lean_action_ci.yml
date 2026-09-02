@@ -20,3 +20,12 @@ jobs:
       - uses: leanprover/lean-action@v1
         with:
           use-github-cache: false
+
+  merge-tests:
+    name: Merge tests
+    runs-on: ubuntu-latest
+    steps:
+      # The required check must pass before the PR can enter the merge queue;
+      # the test suite runs later against the queue's synthetic merge commit.
+      - name: Defer tests to merge queue
+        run: echo "Merge tests run against the merge group's synthetic commit."
