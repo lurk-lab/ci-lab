@@ -1,0 +1,28 @@
+name: Namespace CPU information
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  log-cpu:
+    name: CPU ${{ matrix.shape }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shape: 8x16
+            runner: nscloud-ubuntu-26.04-amd64-8x16
+          - shape: 16x32
+            runner: nscloud-ubuntu-26.04-amd64-16x32
+          - shape: 32x64
+            runner: nscloud-ubuntu-26.04-amd64-32x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/log-cpu
+        with:
+          label: Namespace Ubuntu 26.04 ${{ matrix.shape }}

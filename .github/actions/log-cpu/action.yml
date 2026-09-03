@@ -1,0 +1,52 @@
+name: Log CPU information
+description: Log the current host's CPU and effective cgroup allocation
+
+inputs:
+  label:
+    description: Heading and context for the CPU report
+    required: false
+    default: CPU information
+
+outputs:
+  summary:
+    description: CPU model, effective vCPU count, and total RAM
+    value: ${{ steps.report.outputs.summary }}
+
+runs:
+  using: composite
+  steps:
+    - id: report
+      shell: bash
+      env:
+        CPU_LABEL: ${{ inputs.label }}
+      run: |
+        set -euo pipefail
+        export LC_ALL=C
+
+        cpu_info=$(lscpu)
+        cpu_model=$(printf '%s\n' "$cpu_info" | awk -F ': *' '/^Model name:/ { print $2; exit }')
+        vcpus=$(nproc)
+        ram_kib=$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo)
+        ram=$(awk -v kib="$ram_kib" 'BEGIN { printf "%.1f GiB", kib / 1048576 }')
+
+        echo "::group::$CPU_LABEL"
+        echo "Context: $CPU_LABEL"
+        echo "Runner: ${RUNNER_NAME:-unknown} (${RUNNER_OS:-unknown}/${RUNNER_ARCH:-unknown})"
+        echo "Kernel: $(uname -srvm)"
+        echo "nproc: $vcpus"
+        echo "RAM: $ram"
+        if [ -r /sys/fs/cgroup/cpu.max ]; then
+          echo "cgroup cpu.max: $(< /sys/fs/cgroup/cpu.max)"
+        fi
+        if [ -r /sys/fs/cgroup/cpuset.cpus.effective ]; then
+          echo "cgroup cpuset.cpus.effective: $(< /sys/fs/cgroup/cpuset.cpus.effective)"
+        fi
+        grep -m1 '^Cpus_allowed_list:' /proc/self/status || true
+        printf '%s\n' "$cpu_info"
+        flags=$({ grep -m1 -oE 'avx2|avx512[a-z0-9_]*' /proc/cpuinfo || true; } \
+          | sort -u | tr '\n' ' ')
+        echo "AVX flags: ${flags:-absent}"
+        echo "::endgroup::"
+
+        printf 'summary=CPU: `%s` · vCPUs: `%s` · RAM: `%s`\n' \
+          "${cpu_model:-unknown}" "$vcpus" "$ram" >> "$GITHUB_OUTPUT"
