@@ -1,0 +1,32 @@
+name: Update Lean toolchain
+
+on:
+  schedule:
+    # Daily at 00:00 UTC
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # `dev` carries the fork's `pr` input; `main` only mirrors upstream, which
+      # silently ignores it. A PR is opened on an update/lean-{release} branch
+      # whether or not the build passes, so an incompatible release shows up as
+      # a failing PR to review.
+      #
+      # `github.token` needs `Settings > Actions > General > Workflow
+      # permissions > Allow GitHub Actions to create and approve pull requests`
+      # enabled, and the PR it opens starts no workflow runs — GitHub's guard
+      # against a workflow triggering itself — so its checks sit pending until
+      # someone pushes to the branch or reopens it.
+      - uses: argumentcomputer/lean-update@dev
+        with:
+          pr: true
+          token: ${{ secrets.GITHUB_TOKEN }}
